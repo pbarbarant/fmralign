@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 """
 Alignment methods benchmark (pairwise ROI case).
 ================================================
