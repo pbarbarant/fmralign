@@ -98,7 +98,9 @@ def _fit_online_template(
         Unknown alignment method.
     """
     # Initialize the template as the first image
-    template_data = masker.transform(imgs[np.random.randint(len(imgs))])
+    template_data = masker.transform(
+        imgs[np.random.randint(len(imgs))]
+    ).astype(np.float32)
 
     # Perform stochastic gradient descent to find the template
     estimator = OptimalTransportAlignment(**kwargs)
@@ -111,12 +113,12 @@ def _fit_online_template(
         img_data = get_modality_features(
             [current_img], parcellation_img, masker, modality=modality
         )[0]
-        img_data = masker.transform(current_img)
-        estimator.fit(img_data, template_data)
+        img_data = masker.transform(current_img).astype(np.float32)
+        estimator.fit(template_data, img_data)
         alpha = 1 / (i + 2)
         template_data = (
             1 - alpha
-        ) * template_data + alpha * estimator.transform(img_data)
+        ) * template_data + alpha * estimator.transform(template_data)
     return template_data
 
 
