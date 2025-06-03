@@ -6,6 +6,9 @@ import warnings
 import numpy as np
 import ot
 import torch
+import jax
+from ott.geometry import pointcloud
+from ott.solvers import linear
 from fugw.solvers.utils import (
     batch_elementwise_prod_and_sum,
     crow_indices_to_row_indices,
@@ -390,13 +393,15 @@ class OptimalTransportAlignment(Alignment):
     """
 
     def __init__(
-        self, metric="euclidean", reg=1, tau=1.0, max_iter=1000, tol=1e-3
+        self,
+        reg=1,
+        tol=1e-3,
+        batch_size=None,
     ):
-        self.metric = metric
         self.reg = reg
-        self.tau = tau
         self.tol = tol
-        self.max_iter = max_iter
+        self.batch_size = batch_size
+        self.solver = jax.jit(linear.solve)
 
     def fit(self, X, Y):
         """
@@ -408,31 +413,35 @@ class OptimalTransportAlignment(Alignment):
         Y: (n_samples, n_features) nd array
             target data
         """
-        import jax
-        from ott.geometry import costs, geometry
-        from ott.problems.linear import linear_problem
-        from ott.solvers.linear import sinkhorn
 
-        if self.metric == "euclidean":
-            cost_matrix = costs.Euclidean().all_pairs(x=X.T, y=Y.T)
-        else:
-            cost_matrix = cdist(X.T, Y.T, metric=self.metric)
+        self.geom = pointcloud.PointCloud(
+            X.T,
+            Y.T,
+            epsilon=self.reg,
+            batch_size=self.batch_size,
+            scale_cost="max_cost",
+        )
+        res = self.solver(self.geom)
 
-        geom = geometry.Geometry(cost_matrix=cost_matrix, epsilon=self.reg)
-        problem = linear_problem.LinearProblem(
-            geom, tau_a=self.tau, tau_b=self.tau
-        )
-        solver = sinkhorn.Sinkhorn(
-            geom, max_iterations=self.max_iter, threshold=self.tol
-        )
-        P = jax.jit(solver)(problem)
-        self.R = np.asarray(P.matrix) * len(X.T)
+        self.f = res.f
+        self.g = res.g
 
         return self
 
     def transform(self, X):
         """Transform X using optimal coupling computed during fit."""
-        return X @ self.R
+        self.n_voxels = X.shape[1]
+
+        @jax.jit
+        def apply_potentials(x):
+            return (
+                self.geom.apply_transport_from_potentials(
+                    self.f, self.g, x, axis=0
+                )
+                * self.n_voxels
+            )
+
+        return apply_potentials(X)
 
 
 class IndividualizedNeuralTuning(Alignment):
