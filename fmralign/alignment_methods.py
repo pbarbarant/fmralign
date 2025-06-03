@@ -8,7 +8,7 @@ import ot
 import torch
 import jax
 from ott.geometry import pointcloud
-from ott.solvers import linear
+from ott.tools import sinkhorn_divergence
 from fugw.solvers.utils import (
     batch_elementwise_prod_and_sum,
     crow_indices_to_row_indices,
@@ -21,6 +21,7 @@ from scipy.sparse import diags
 from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import RidgeCV
+from functools import partial
 
 # Fast implementation for parallelized computing
 from fmralign.hyperalignment.linalg import safe_svd, svd_pca
@@ -401,7 +402,6 @@ class OptimalTransportAlignment(Alignment):
         self.reg = reg
         self.tol = tol
         self.batch_size = batch_size
-        self.solver = jax.jit(linear.solve)
 
     def fit(self, X, Y):
         """
@@ -421,10 +421,16 @@ class OptimalTransportAlignment(Alignment):
             batch_size=self.batch_size,
             scale_cost="max_cost",
         )
-        res = self.solver(self.geom)
+        solver = jax.jit(
+            partial(
+                sinkhorn_divergence.sinkdiv,
+                batch_size=self.batch_size,
+                scale_cost="max_cost",
+            )
+        )
 
-        self.f = res.f
-        self.g = res.g
+        _, out = solver(X.T, Y.T)
+        self.dual_potentials = out.to_dual_potentials()
 
         return self
 
@@ -432,14 +438,11 @@ class OptimalTransportAlignment(Alignment):
         """Transform X using optimal coupling computed during fit."""
         self.n_voxels = X.shape[1]
 
-        @jax.jit
+        # @jax.jit
+        # def apply_potentials(x):
+        #     return self.dual_potentials._grad_f(x.T).T
         def apply_potentials(x):
-            return (
-                self.geom.apply_transport_from_potentials(
-                    self.f, self.g, x, axis=0
-                )
-                * self.n_voxels
-            )
+            return self.dual_potentials.transport(x.T).T
 
         return apply_potentials(X)
 
