@@ -306,8 +306,8 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         """
         if hasattr(self, "parcel_masker"):
             check_is_fitted(self)
-            labels = self.parcel_masker.get_labels()
-            parcellation_img = self.parcel_masker.get_parcellation_img()
+            labels = self.labels
+            parcellation_img = self.clustering
             return labels, parcellation_img
         else:
             raise AttributeError(
