@@ -4,58 +4,34 @@ import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 
-from fmralign._utils import get_modality_features
-from fmralign.alignment_methods import OptimalTransportAlignment
+from fmralign._utils import (
+    get_modality_features,
+    _sparse_cluster_matrix,
+    _make_parcellation,
+)
+from fmralign.alignment_methods import SparseUOT
 
 
-def _align_images_to_template(
-    subjects_data,
-    template,
-    subjects_estimators,
-):
-    """Align the subjects data to the template using sparse alignment.
-
-    Parameters
-    ----------
-    subjects_data : List of torch.Tensor of shape (n_samples, n_features)
-        List of subjects data.
-    template : torch.Tensor of shape (n_samples, n_features)
-        Template data.
-    subjects_estimators : List of alignment_methods.Alignment
-        List of sparse alignment estimators.
-
-    Returns
-    -------
-    Tuple of List of torch.Tensor of shape (n_samples, n_features)
-        and List of alignment_methods.Alignment
-        Updated subjects data and alignment estimators.
-    """
-    n_subjects = len(subjects_data)
-    for i in range(n_subjects):
-        sparse_estimator = subjects_estimators[i]
-        sparse_estimator.fit(subjects_data[i], template)
-        subjects_data[i] = sparse_estimator.transform(subjects_data[i])
-        # Update the estimator in the list
-        subjects_estimators[i] = sparse_estimator
-    return subjects_data, subjects_estimators
-
-
-def alignment_to_template(
+def _align_to_template(
     imgs,
     template_data,
     masker,
+    sparsity_mask,
     parcellation_img=None,
     modality="response",
     verbose=False,
+    device="cpu",
     **kwargs,
 ):
     alignment_estimators = []
-    for img in imgs:
-        img_data = get_modality_features(
-            [img], parcellation_img, masker, modality=modality
-        )[0]
+    imgs_ = get_modality_features(
+        imgs, parcellation_img, masker, modality=modality
+    )
+    for img in imgs_:
         img_data = masker.transform(img)
-        estimator = OptimalTransportAlignment(verbose=verbose, **kwargs)
+        estimator = SparseUOT(
+            sparsity_mask, device=device, verbose=max(0, verbose - 1), **kwargs
+        )
         estimator.fit(img_data, template_data)
         alignment_estimators.append(estimator)
 
@@ -65,10 +41,12 @@ def alignment_to_template(
 def _fit_online_template(
     imgs,
     masker,
-    parcellation_img=None,
+    sparsity_mask,
+    parcellation_img,
     modality="response",
     n_iter=100,
     verbose=False,
+    device="cpu",
     **kwargs,
 ):
     """Fit a the template to the subjects data using sparse alignment.
@@ -98,12 +76,12 @@ def _fit_online_template(
         Unknown alignment method.
     """
     # Initialize the template as the first image
-    template_data = masker.transform(
-        imgs[np.random.randint(len(imgs))]
-    ).astype(np.float32)
+    template_data = masker.transform(imgs[0]).astype(np.float32)
 
     # Perform stochastic gradient descent to find the template
-    estimator = OptimalTransportAlignment(**kwargs)
+    estimator = SparseUOT(
+        sparsity_mask, device=device, verbose=max(0, verbose - 1), **kwargs
+    )
     n_iter_ = max(n_iter, len(imgs))
     for i in range(n_iter_):
         if verbose:
@@ -202,6 +180,7 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         self.modality = modality
         self.device = device
         self.n_jobs = n_jobs
+        self.device = device
         self.verbose = verbose
         self.kwargs = kwargs
 
@@ -230,26 +209,39 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         # imgs_ = get_modality_features(
         #     imgs, self.clustering, self.masker, self.modality
         # )
+        self.labels = _make_parcellation(
+            None,
+            clustering=self.clustering,
+            n_pieces=None,
+            masker=self.masker,
+            smoothing_fwhm=None,
+            verbose=max(0, self.verbose - 1),
+        )
+        self.sparsity_mask = _sparse_cluster_matrix(self.labels)
 
         template_data = _fit_online_template(
             imgs=imgs,
             masker=self.masker,
+            sparsity_mask=self.sparsity_mask,
             parcellation_img=self.clustering,
             modality=self.modality,
             n_iter=self.n_iter,
             verbose=max(0, self.verbose - 1),
+            device=self.device,
             **self.kwargs,
         )
 
         self.template = self.masker.inverse_transform(template_data)
-        self.fit_ = alignment_to_template(
+        self.fit_ = _align_to_template(
             imgs=imgs,
             template_data=template_data,
             masker=self.masker,
+            sparsity_mask=self.sparsity_mask,
+            parcellation_img=self.clustering,
             modality=self.modality,
             device=self.device,
-            n_jobs=self.n_jobs,
             verbose=max(0, self.verbose - 1),
+            **self.kwargs,
         )
 
         if self.save_template is not None:
