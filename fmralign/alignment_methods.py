@@ -9,12 +9,8 @@ import torch
 import jax
 from ott.geometry import pointcloud
 from ott.tools import sinkhorn_divergence
-from fugw.solvers.utils import (
-    batch_elementwise_prod_and_sum,
-    crow_indices_to_row_indices,
-    solver_sinkhorn_sparse,
-)
-from fugw.utils import _low_rank_squared_l2, _make_csr_matrix
+from ott.solvers import linear
+from fugw.solvers.utils import solver_sinkhorn_log_sparse
 from joblib import Parallel, delayed
 from scipy import linalg
 from scipy.sparse import diags
@@ -747,10 +743,10 @@ class SparseUOT(Alignment):
     def __init__(
         self,
         sparsity_mask,
-        rho=float("inf"),
+        rho=torch.Tensor([float("inf")]),
         reg=1,
         max_iter=1000,
-        tol=1e-3,
+        tol=1e-7,
         eval_freq=10,
         device="cpu",
         verbose=False,
@@ -764,52 +760,49 @@ class SparseUOT(Alignment):
         self.device = device
         self.verbose = verbose
 
-    def _initialize_weights(self, n, cost):
-        crow_indices, col_indices = cost.crow_indices(), cost.col_indices()
-        row_indices = crow_indices_to_row_indices(crow_indices)
-        weights = torch.ones(n, device=self.device) / n
-        ws_dot_wt_values = weights[row_indices] * weights[col_indices]
-        ws_dot_wt = _make_csr_matrix(
-            crow_indices,
-            col_indices,
-            ws_dot_wt_values,
-            cost.size(),
-            self.device,
-        )
-        return weights, ws_dot_wt
+    def _compute_cost_from_mask(
+        self, source_features, target_features, sparsity_mask
+    ):
+        indices = sparsity_mask.indices()
+        size = sparsity_mask.size()
+        row_idx, col_idx = indices[0], indices[1]
 
-    def _initialize_plan(self, n):
-        return (
-            torch.sparse_coo_tensor(
-                self.sparsity_mask.indices(),
-                torch.ones_like(self.sparsity_mask.values())
-                / self.sparsity_mask.values().shape[0],
-                (n, n),
-            )
-            .coalesce()
-            .to_sparse_csr()
-            .to(self.device)
-        )
+        xi = source_features[row_idx]  # (nnz, d)
+        yj = target_features[col_idx]  # (nnz, d)
 
-    def _uot_cost(self, init_plan, F, n):
-        crow_indices, col_indices = (
-            init_plan.crow_indices(),
-            init_plan.col_indices(),
+        sq_dist = ((xi - yj) ** 2).sum(dim=1) * 0.5  # (nnz,)
+
+        return torch.sparse_coo_tensor(indices, sq_dist, size=size).coalesce()
+
+    def _sinkhorn_divergence(
+        self,
+        source_features,
+        target_features,
+        sparsity_mask,
+        ws,
+        wt,
+        eps,
+        solver,
+    ):
+        """Compute the Sinkhorn divergence between two sets of features."""
+        cost_xy = self._compute_cost_from_mask(
+            source_features, target_features, sparsity_mask
         )
-        row_indices = crow_indices_to_row_indices(crow_indices)
-        cost_values = batch_elementwise_prod_and_sum(
-            F[0], F[1], row_indices, col_indices, 1
+        cost_xx = self._compute_cost_from_mask(
+            source_features, source_features, sparsity_mask
         )
-        # Clamp negative values to avoid numerical errors
-        cost_values = torch.clamp(cost_values, min=0.0)
-        cost_values = torch.sqrt(cost_values)
-        return _make_csr_matrix(
-            crow_indices,
-            col_indices,
-            cost_values,
-            (n, n),
-            self.device,
+        cost_yy = self._compute_cost_from_mask(
+            target_features, target_features, sparsity_mask
         )
+        (alpha, beta), _ = solver(cost_xy, ws, wt, eps)
+        (alpha_x, beta_x), _ = solver(cost_xx, ws, ws, eps)
+        (alpha_y, beta_y), _ = solver(cost_yy, wt, wt, eps)
+        loss = (
+            (alpha.dot(ws) + beta.dot(wt))
+            - (alpha_x.dot(ws) + beta_x.dot(ws)) / 2
+            - (alpha_y.dot(wt) + beta_y.dot(wt)) / 2
+        )
+        return loss
 
     def fit(self, X, Y):
         """
@@ -822,40 +815,39 @@ class SparseUOT(Alignment):
             target data
         """
         n_features = X.shape[1]
-        F = _low_rank_squared_l2(X.T, Y.T)
 
-        init_plan = self._initialize_plan(n_features)
-        cost = self._uot_cost(init_plan, F, n_features)
+        ws = torch.ones(n_features, device=self.device) / n_features
+        wt = torch.ones(n_features, device=self.device) / n_features
 
-        weights, ws_dot_wt = self._initialize_weights(n_features, cost)
+        source_features = torch.Tensor(X.T).to(self.device)
+        source_features.requires_grad_(True)
+        target_features = torch.Tensor(Y.T).to(self.device)
+        sparsity_mask = self.sparsity_mask.to(self.device)
 
-        uot_params = (
-            torch.tensor([self.rho], device=self.device),
-            torch.tensor([self.rho], device=self.device),
-            torch.tensor([self.reg], device=self.device),
+        loss = self._sinkhorn_divergence(
+            source_features,
+            target_features,
+            sparsity_mask,
+            ws,
+            wt,
+            self.reg,
+            solver=partial(
+                solver_sinkhorn_log_sparse,
+                rho_s=self.rho,
+                rho_t=self.rho,
+                numItermax=self.max_iter,
+                tol=self.tol,
+                eval_freq=self.eval_freq,
+                verbose=self.verbose,
+            ),
         )
-        init_duals = (
-            torch.zeros(n_features, device=self.device),
-            torch.zeros(n_features, device=self.device),
-        )
-        tuple_weights = (weights, weights, ws_dot_wt)
-        train_params = (self.max_iter, self.tol, self.eval_freq)
 
-        _, pi = solver_sinkhorn_sparse(
-            cost=cost,
-            init_duals=init_duals,
-            uot_params=uot_params,
-            tuple_weights=tuple_weights,
-            train_params=train_params,
-            verbose=self.verbose,
-        )
+        g = torch.autograd.grad(loss, [source_features])[0]
+        self.BrenierMap = (-g / ws.view(-1, 1)).detach().cpu().numpy()
 
-        # Convert pi to coo format
-        self.R = pi.to_sparse_coo().detach() * n_features
-
-        if self.R.values().isnan().any():
+        if np.isnan(self.BrenierMap).any():
             raise ValueError(
-                "Coupling matrix contains NaN values,"
+                "Gradient of the first potential contains NaN values,"
                 "try increasing the regularization parameter."
             )
 
@@ -874,4 +866,4 @@ class SparseUOT(Alignment):
         torch.Tensor of shape (n_samples, n_features)
             Transformed data
         """
-        return (X @ self.R).to_dense()
+        return (X.T + self.BrenierMap).T
