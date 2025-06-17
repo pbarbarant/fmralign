@@ -393,15 +393,11 @@ class OptimalTransportAlignment(Alignment):
         Mixing matrix containing the optimal permutation
     """
 
-    def __init__(
-        self,
-        reg=1,
-        tol=1e-3,
-        batch_size=None,
-    ):
+    def __init__(self, reg=1, tol=1e-3, batch_size=None, solver="sinkhorn"):
         self.reg = reg
         self.tol = tol
         self.batch_size = batch_size
+        self.solver = solver
 
     def fit(self, X, Y):
         """
@@ -421,15 +417,19 @@ class OptimalTransportAlignment(Alignment):
             batch_size=self.batch_size,
             scale_cost="max_cost",
         )
-        solver = jax.jit(
-            partial(
-                sinkhorn_divergence.sinkdiv,
-                batch_size=self.batch_size,
-                scale_cost="max_cost",
+        if self.solver == "sinkhorn":
+            solver = jax.jit(linear.solve)
+            out = solver(self.geom)
+        elif self.solver == "sinkdiv":
+            solver = jax.jit(
+                partial(
+                    sinkhorn_divergence.sinkdiv,
+                    batch_size=self.batch_size,
+                    scale_cost="max_cost",
+                )
             )
-        )
+            _, out = solver(X.T, Y.T)
 
-        _, out = solver(X.T, Y.T)
         self.dual_potentials = out.to_dual_potentials()
 
         return self
