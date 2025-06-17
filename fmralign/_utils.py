@@ -229,7 +229,7 @@ def _make_parcellation(
     # check if clustering is provided
     if isinstance(clustering, nib.nifti1.Nifti1Image):
         check_same_fov(masker.mask_img_, clustering)
-        labels = apply_mask_fmri(clustering, masker.mask_img_).astype(int)
+        labels = apply_mask_fmri(clustering, masker.mask_img_).astype(int)[0]
 
     elif isinstance(clustering, SurfaceImage):
         labels = (
