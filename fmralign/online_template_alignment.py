@@ -17,17 +17,12 @@ def _align_to_template(
     template_data,
     masker,
     sparsity_mask,
-    parcellation_img=None,
-    modality="response",
     verbose=False,
     device="cpu",
     **kwargs,
 ):
     alignment_estimators = []
-    imgs_ = get_modality_features(
-        imgs, parcellation_img, masker, modality=modality
-    )
-    for img in imgs_:
+    for img in imgs:
         img_data = masker.transform(img)
         estimator = SparseUOT(
             sparsity_mask, device=device, verbose=max(0, verbose - 1), **kwargs
@@ -42,8 +37,6 @@ def _fit_online_template(
     imgs,
     masker,
     sparsity_mask,
-    parcellation_img,
-    modality="response",
     n_iter=100,
     verbose=False,
     device="cpu",
@@ -88,9 +81,6 @@ def _fit_online_template(
             print(f"Iteration {i + 1}/{n_iter_}")
         # Get a random image from the subjects
         current_img = imgs[np.random.randint(len(imgs))]
-        img_data = get_modality_features(
-            [current_img], parcellation_img, masker, modality=modality
-        )[0]
         img_data = masker.transform(current_img).astype(np.float32)
         estimator.fit(template_data, img_data)
         alpha = 1 / (i + 2)
@@ -205,10 +195,11 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
 
         """
 
-        # # Add new features based on the modality
-        # imgs_ = get_modality_features(
-        #     imgs, self.clustering, self.masker, self.modality
-        # )
+        # Add new features based on the modality
+        imgs_ = get_modality_features(
+            imgs, self.clustering, self.masker, self.modality
+        )
+
         self.labels = _make_parcellation(
             None,
             clustering=self.clustering,
@@ -220,11 +211,9 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         self.sparsity_mask = _sparse_cluster_matrix(self.labels)
 
         template_data = _fit_online_template(
-            imgs=imgs,
+            imgs=imgs_,
             masker=self.masker,
             sparsity_mask=self.sparsity_mask,
-            parcellation_img=self.clustering,
-            modality=self.modality,
             n_iter=self.n_iter,
             verbose=max(0, self.verbose - 1),
             device=self.device,
@@ -233,12 +222,10 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
 
         self.template = self.masker.inverse_transform(template_data)
         self.fit_ = _align_to_template(
-            imgs=imgs,
+            imgs=imgs_,
             template_data=template_data,
             masker=self.masker,
             sparsity_mask=self.sparsity_mask,
-            parcellation_img=self.clustering,
-            modality=self.modality,
             device=self.device,
             verbose=max(0, self.verbose - 1),
             **self.kwargs,
