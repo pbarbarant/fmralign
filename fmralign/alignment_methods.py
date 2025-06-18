@@ -774,7 +774,7 @@ class SparseUOT(Alignment):
 
         return torch.sparse_coo_tensor(indices, sq_dist, size=size).coalesce()
 
-    def _sinkhorn_divergence(
+    def _half_sinkhorn_div(
         self,
         source_features,
         target_features,
@@ -791,18 +791,12 @@ class SparseUOT(Alignment):
         cost_xx = self._compute_cost_from_mask(
             source_features, source_features, sparsity_mask
         )
-        cost_yy = self._compute_cost_from_mask(
-            target_features, target_features, sparsity_mask
-        )
         (alpha, beta), _ = solver(cost_xy, ws, wt, eps)
         (alpha_x, beta_x), _ = solver(cost_xx, ws, ws, eps)
-        (alpha_y, beta_y), _ = solver(cost_yy, wt, wt, eps)
-        loss = (
-            (alpha.dot(ws) + beta.dot(wt))
-            - (alpha_x.dot(ws) + beta_x.dot(ws)) / 2
-            - (alpha_y.dot(wt) + beta_y.dot(wt)) / 2
-        )
-        return loss
+        half_loss = (alpha.dot(ws) + beta.dot(wt)) - (alpha_x + beta_x).dot(
+            ws
+        ) / 2
+        return half_loss
 
     def fit(self, X, Y):
         """
@@ -814,17 +808,16 @@ class SparseUOT(Alignment):
         Y: (n_samples, n_features) torch.Tensor
             target data
         """
-        n_features = X.shape[1]
 
-        ws = torch.ones(n_features, device=self.device) / n_features
-        wt = torch.ones(n_features, device=self.device) / n_features
+        ws = 1 / self.sparsity_mask.sum(dim=0).to_dense().to(self.device)
+        wt = ws
 
         source_features = torch.Tensor(X.T).to(self.device)
         source_features.requires_grad_(True)
         target_features = torch.Tensor(Y.T).to(self.device)
         sparsity_mask = self.sparsity_mask.to(self.device)
 
-        loss = self._sinkhorn_divergence(
+        loss = self._half_sinkhorn_div(
             source_features,
             target_features,
             sparsity_mask,
