@@ -318,8 +318,8 @@ def _sparse_cluster_matrix(arr):
             cols += indices
 
     # Convert to tensors
-    rows = torch.tensor(rows)
-    cols = torch.tensor(cols)
+    rows = torch.tensor(np.array(rows))
+    cols = torch.tensor(np.array(cols))
     values = torch.ones(len(rows), dtype=torch.bool)
 
     # Create sparse tensor
