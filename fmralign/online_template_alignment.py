@@ -10,6 +10,7 @@ from fmralign._utils import (
     _make_parcellation,
 )
 from fmralign.alignment_methods import SparseUOT
+from nilearn.masking import apply_mask_fmri, unmask
 
 
 def _align_to_template(
@@ -23,9 +24,13 @@ def _align_to_template(
 ):
     alignment_estimators = []
     for img in imgs:
-        img_data = masker.transform(img)
+        img_data = apply_mask_fmri(img, masker.mask_img_).astype(np.float32)
         estimator = SparseUOT(
-            sparsity_mask, device=device, verbose=max(0, verbose - 1), **kwargs
+            sparsity_mask,
+            method="sinkhorn",
+            device=device,
+            verbose=max(0, verbose - 1),
+            **kwargs,
         )
         estimator.fit(img_data, template_data)
         alignment_estimators.append(estimator)
@@ -69,11 +74,17 @@ def _fit_online_template(
         Unknown alignment method.
     """
     # Initialize the template as the first image
-    template_data = masker.transform(imgs[0]).astype(np.float32)
+    template_data = apply_mask_fmri(imgs[0], masker.mask_img_).astype(
+        np.float32
+    )
 
     # Perform stochastic gradient descent to find the template
     estimator = SparseUOT(
-        sparsity_mask, device=device, verbose=max(0, verbose - 1), **kwargs
+        sparsity_mask,
+        method="sinkhorn_divergence",
+        device=device,
+        verbose=max(0, verbose - 1),
+        **kwargs,
     )
     n_iter_ = max(n_iter, len(imgs))
     for i in range(n_iter_):
@@ -81,7 +92,9 @@ def _fit_online_template(
             print(f"Iteration {i + 1}/{n_iter_}")
         # Get a random image from the subjects
         current_img = imgs[np.random.randint(len(imgs))]
-        img_data = masker.transform(current_img).astype(np.float32)
+        img_data = apply_mask_fmri(current_img, masker.mask_img_).astype(
+            np.float32
+        )
         estimator.fit(template_data, img_data)
         alpha = 1 / (i + 2)
         template_data = (
@@ -220,7 +233,7 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
             **self.kwargs,
         )
 
-        self.template = self.masker.inverse_transform(template_data)
+        self.template = unmask(template_data, self.masker.mask_img_)
         self.fit_ = _align_to_template(
             imgs=imgs_,
             template_data=template_data,
