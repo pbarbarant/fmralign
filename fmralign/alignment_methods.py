@@ -767,39 +767,18 @@ class SparseUOT(Alignment):
     ):
         indices = sparsity_mask.indices()
         size = sparsity_mask.size()
-        row_idx, col_idx = indices[0], indices[1]
-        nnz = row_idx.shape[0]
-        chunk_size = 10000
-
-        # Create lists to store results (more memory efficient for very large tensors)
-        all_indices = []
-        all_values = []
-
-        # Process in chunks
-        for start_idx in range(0, nnz, chunk_size):
-            end_idx = min(start_idx + chunk_size, nnz)
-
-            # Get chunk
-            chunk_row = row_idx[start_idx:end_idx]
-            chunk_col = col_idx[start_idx:end_idx]
-
-            # Compute distances
-            xi = source_features[chunk_row]
-            yj = target_features[chunk_col]
-            chunk_sq_dist = 0.5 * torch.sum((xi - yj) ** 2, dim=1)
-
-            # Store chunk results
-            chunk_indices = torch.stack([chunk_row, chunk_col], dim=0)
-            all_indices.append(chunk_indices)
-            all_values.append(chunk_sq_dist)
-
-            # Optional: clear cache to free memory
-            if start_idx % (chunk_size * 100) == 0:
-                torch.cuda.empty_cache()
-
-        # Concatenate all results
-        indices = torch.cat(all_indices, dim=1)
-        values = torch.cat(all_values, dim=0)
+        row_indices, col_indices = indices[0], indices[1]
+        batch_size = int(1e4)
+        values = torch.cat(
+            [
+                0.5
+                * (
+                    source_features[row_indices[i : i + batch_size], :]
+                    - target_features[col_indices[i : i + batch_size],]
+                ).sum(1)
+                for i in range(0, len(row_indices), batch_size)
+            ]
+        )
 
         return torch.sparse_coo_tensor(indices, values, size=size).coalesce()
 
@@ -812,17 +791,14 @@ class SparseUOT(Alignment):
         wt,
         eps,
         solver,
-        device,
     ):
         """Compute the Sinkhorn divergence between two sets of features."""
         cost_xy = self._compute_cost_from_mask(
             source_features, target_features, sparsity_mask
-        ).to(device)
+        )
         cost_xx = self._compute_cost_from_mask(
             source_features, source_features, sparsity_mask
-        ).to(device)
-        ws = ws.to(device)
-        wt = wt.to(device)
+        )
         (alpha, beta), _ = solver(cost_xy, ws, wt, eps)
         (alpha_x, beta_x), _ = solver(cost_xx, ws, ws, eps)
         half_loss = (alpha.dot(ws) + beta.dot(wt)) - (alpha_x + beta_x).dot(
@@ -839,13 +815,10 @@ class SparseUOT(Alignment):
         wt,
         eps,
         solver,
-        device,
     ):
         cost_xy = self._compute_cost_from_mask(
             source_features, target_features, sparsity_mask
-        ).to(device)
-        ws = ws.to(device)
-        wt = wt.to(device)
+        )
         _, pi = solver(cost_xy, ws, wt, eps)
         return pi
 
@@ -860,13 +833,14 @@ class SparseUOT(Alignment):
             target data
         """
 
-        ws = 1 / self.sparsity_mask.sum(dim=0).to_dense()
+        sparsity_mask = self.sparsity_mask.to(self.device)
+        self.weights = 1 / sparsity_mask.sum(dim=0).to_dense()
+        ws = self.weights
         wt = ws
-        self.ws = ws
 
-        source_features = torch.Tensor(X.T)
+        source_features = torch.Tensor(X.T).to(self.device)
         source_features.requires_grad_(True)
-        target_features = torch.Tensor(Y.T)
+        target_features = torch.Tensor(Y.T).to(self.device)
 
         solver = partial(
             solver_sinkhorn_log_sparse,
@@ -882,12 +856,11 @@ class SparseUOT(Alignment):
             loss = self._half_sinkhorn_div(
                 source_features,
                 target_features,
-                self.sparsity_mask,
+                sparsity_mask,
                 ws,
                 wt,
                 self.reg,
                 solver=solver,
-                device=self.device,
             )
 
             g = torch.autograd.grad(loss, [source_features])[0]
@@ -903,12 +876,11 @@ class SparseUOT(Alignment):
             pi = self._sinkhorn_plan(
                 source_features,
                 target_features,
-                self.sparsity_mask,
+                sparsity_mask,
                 ws,
                 wt,
                 self.reg,
                 solver=solver,
-                device=self.device,
             )
 
             self.pi = pi.detach().cpu()
@@ -932,5 +904,7 @@ class SparseUOT(Alignment):
             X_transformed = (X.T + self.BrenierMap).T
         elif self.method == "sinkhorn":
             X_torch = torch.Tensor(X)
-            X_transformed = (X_torch @ self.pi / self.ws).numpy()
+            X_transformed = (
+                X_torch @ self.pi / self.weights.to("cpu")
+            ).numpy()
         return X_transformed
