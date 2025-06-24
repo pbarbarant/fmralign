@@ -6,16 +6,17 @@ import nibabel as nib
 import numpy as np
 import torch
 from nilearn._utils.niimg_conversions import check_same_fov
-from nilearn.image import concat_imgs, new_img_like, smooth_img
+from nilearn.image import concat_imgs, new_img_like, smooth_img, resampling
 from nilearn.maskers import NiftiLabelsMasker, SurfaceLabelsMasker
 from nilearn.maskers._utils import concatenate_surface_images
-from nilearn.masking import apply_mask_fmri, intersect_masks
+from nilearn.masking import apply_mask_fmri, intersect_masks, load_mask_img
 from nilearn.regions.parcellations import Parcellations
 from nilearn.surface import SurfaceImage
 from pathlib import Path
 import joblib
 import datetime
 from sklearn.exceptions import NotFittedError
+from sklearn import neighbors
 
 
 class ParceledData:
@@ -286,7 +287,7 @@ def _make_parcellation(
     return labels
 
 
-def _sparse_cluster_matrix(arr):
+def _sparse_clusters_parcellation(arr):
     """
     Creates a sparse matrix where element (i,j) is 1 if arr[i] == arr[j], 0 otherwise.
 
@@ -327,6 +328,49 @@ def _sparse_cluster_matrix(arr):
         indices=torch.stack([rows, cols]),
         values=values,
         size=(n, n),
+    ).coalesce()
+
+    return sparse_matrix
+
+
+def _sparse_clusters_radius(mask_img, radius, symmetric=False):
+    """
+    Creates a sparse adjacency matrix from a mask image where each voxel
+    is connected to its neighbors within a specified radius.
+
+    Parameters
+    ----------
+    mask_img: 3D Nifti1Image
+        Mask image to define the voxels.
+    radius: float
+        Radius in mm to define the neighborhood for each voxel.
+
+
+    Returns
+    -------
+    sparse_matrix: sparse torch.Tensor of shape (n_voxels, n_voxels)
+    """
+    mask_data, mask_affine = load_mask_img(mask_img)
+    mask_coords = np.where(mask_data != 0)
+    mask_coords = resampling.coord_transform(
+        mask_coords[0],
+        mask_coords[1],
+        mask_coords[2],
+        mask_affine,
+    )
+    mask_coords = np.asarray(mask_coords).T
+    clf = neighbors.NearestNeighbors(radius=radius)
+    A = clf.fit(mask_coords).radius_neighbors_graph(mask_coords)
+
+    # Convert CSR to COO
+    coo = A.tocoo()
+
+    # Create torch sparse COO tensor
+    indices = torch.tensor(np.array([coo.row, coo.col]), dtype=torch.int64)
+    values = torch.tensor(coo.data, dtype=torch.bool)
+    size = coo.shape
+    sparse_matrix = torch.sparse_coo_tensor(
+        indices=indices, values=values, size=size
     ).coalesce()
 
     return sparse_matrix
