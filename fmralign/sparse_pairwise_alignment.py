@@ -4,7 +4,10 @@ import torch
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 
-from fmralign._utils import _sparse_cluster_matrix, get_modality_features
+from fmralign._utils import (
+    _sparse_clusters_parcellation,
+    get_modality_features,
+)
 from fmralign.alignment_methods import SparseUOT
 from fmralign.preprocessing import ParcellationMasker
 
@@ -119,7 +122,7 @@ class SparsePairwiseAlignment(BaseEstimator, TransformerMixin):
             self.masker.transform(Y_), device=self.device, dtype=torch.float32
         )
 
-        sparsity_mask = _sparse_cluster_matrix(self.labels_)
+        sparsity_mask = _sparse_clusters_parcellation(self.labels_)
         if self.alignment_method == "sparse_uot":
             self.fit_ = SparseUOT(
                 sparsity_mask=sparsity_mask,
