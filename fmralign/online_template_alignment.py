@@ -6,8 +6,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from fmralign._utils import (
     get_modality_features,
-    _sparse_cluster_matrix,
-    _make_parcellation,
+    _sparse_clusters_radius,
 )
 from fmralign.alignment_methods import SparseUOT
 from nilearn.masking import apply_mask_fmri, unmask
@@ -212,16 +211,7 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         imgs_ = get_modality_features(
             imgs, self.clustering, self.masker, self.modality
         )
-
-        self.labels = _make_parcellation(
-            None,
-            clustering=self.clustering,
-            n_pieces=None,
-            masker=self.masker,
-            smoothing_fwhm=None,
-            verbose=max(0, self.verbose - 1),
-        )
-        self.sparsity_mask = _sparse_cluster_matrix(self.labels)
+        self.sparsity_mask = _sparse_clusters_radius(self.masker.mask_img_, 5)
 
         template_data = _fit_online_template(
             imgs=imgs_,
