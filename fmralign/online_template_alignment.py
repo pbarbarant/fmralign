@@ -37,10 +37,17 @@ def _align_to_template(
     return alignment_estimators
 
 
+def load_one_subject(imgs, parcellation_img, masker, modality):
+    imgs_ = get_modality_features(imgs, parcellation_img, masker, modality)
+    return apply_mask_fmri(imgs_, masker.mask_img_).astype(np.float32)
+
+
 def _fit_online_template(
     imgs,
     masker,
+    parcellation_img,
     sparsity_mask,
+    modality="response",
     n_iter=100,
     verbose=False,
     device="cpu",
@@ -54,8 +61,8 @@ def _fit_online_template(
         List of subjects data.
     sparsity_mask : torch sparse COO tensor
         Sparsity mask for the alignment matrix.
-    alignment_method : str, optional
-        Sparse alignment method, by default "sparse_uot"
+    modality : str, optional
+        Modality to be used for the alignment, by default "response".
     n_iter : int, optional
         Number of template updates, by default 2
     verbose : bool, optional
@@ -73,8 +80,11 @@ def _fit_online_template(
         Unknown alignment method.
     """
     # Initialize the template as the first image
-    template_data = apply_mask_fmri(imgs[0], masker.mask_img_).astype(
-        np.float32
+    template_data = load_one_subject(
+        imgs[0],
+        parcellation_img,
+        masker,
+        modality=modality,
     )
 
     # Perform stochastic gradient descent to find the template
@@ -91,8 +101,11 @@ def _fit_online_template(
             print(f"Iteration {i + 1}/{n_iter_}")
         # Get a random image from the subjects
         current_img = imgs[np.random.randint(len(imgs))]
-        img_data = apply_mask_fmri(current_img, masker.mask_img_).astype(
-            np.float32
+        img_data = load_one_subject(
+            current_img,
+            parcellation_img,
+            masker,
+            modality=modality,
         )
         estimator.fit(template_data, img_data)
         alpha = 1 / (i + 2)
@@ -111,12 +124,12 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
 
     def __init__(
         self,
-        alignment_method="sparse_uot",
         n_pieces=1,
         clustering="kmeans",
         n_iter=2,
         save_template=None,
         masker=None,
+        radius=5,
         modality="response",
         device="cpu",
         n_jobs=1,
@@ -126,9 +139,6 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         """
         Parameters
         ----------
-        alignment_method: string
-            Algorithm used to perform alignment between source images
-            and template, currently only 'sparse_uot' is supported.
         n_pieces: int, optional (default = 1)
             Number of regions in which the data is parcellated for alignment.
             If 1 the alignment is done on full scale data.
@@ -141,9 +151,9 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
             If 3D Niimg, image used as predefined clustering,
             n_pieces is then ignored.
         n_iter: int
-           number of iteration in the alternate minimization. Each img is
-           aligned n_iter times to the evolving template. If n_iter = 0,
-           the template is simply the mean of the input images.
+            number of iteration in the alternate minimization. Each img is
+            aligned n_iter times to the evolving template. If n_iter = 0,
+            the template is simply the mean of the input images.
         save_template: None or string(optional)
             If not None, path to which the template will be saved.
         masker : None or :class:`~nilearn.maskers.NiftiMasker` or \
@@ -152,6 +162,8 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
             A mask to be used on the data. If provided, the mask
             will be used to extract the data. If None, a mask will
             be computed automatically with default parameters.
+        radius: int, optional (default = 5)
+            Radius in mm to define the neighborhood for each voxel.
         modality : str, optional (default='response')
             Specifies the alignment modality to be used:
             * 'response': Aligns by directly comparing corresponding similar 
@@ -173,12 +185,12 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         """
         self.template = None
         self.template_history = None
-        self.alignment_method = alignment_method
         self.n_pieces = n_pieces
         self.clustering = clustering
         self.n_iter = n_iter
         self.save_template = save_template
         self.masker = masker
+        self.radius = radius
         self.modality = modality
         self.device = device
         self.n_jobs = n_jobs
@@ -206,17 +218,16 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
             Length : n_samples
 
         """
-
-        # Add new features based on the modality
-        imgs_ = get_modality_features(
-            imgs, self.clustering, self.masker, self.modality
+        self.sparsity_mask = _sparse_clusters_radius(
+            self.masker.mask_img_, self.radius
         )
-        self.sparsity_mask = _sparse_clusters_radius(self.masker.mask_img_, 5)
 
         template_data = _fit_online_template(
-            imgs=imgs_,
+            imgs=imgs,
             masker=self.masker,
+            parcellation_img=self.clustering,
             sparsity_mask=self.sparsity_mask,
+            modality=self.modality,
             n_iter=self.n_iter,
             verbose=max(0, self.verbose - 1),
             device=self.device,
@@ -225,7 +236,7 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
 
         self.template = unmask(template_data, self.masker.mask_img_)
         self.fit_ = _align_to_template(
-            imgs=imgs_,
+            imgs=imgs,
             template_data=template_data,
             masker=self.masker,
             sparsity_mask=self.sparsity_mask,
