@@ -7,7 +7,6 @@ import numpy as np
 import torch
 from nilearn._utils.niimg_conversions import check_same_fov
 from nilearn.image import concat_imgs, new_img_like, smooth_img, resampling
-from nilearn.maskers import NiftiLabelsMasker, SurfaceLabelsMasker
 from nilearn.maskers._utils import concatenate_surface_images
 from nilearn.masking import apply_mask_fmri, intersect_masks, load_mask_img
 from nilearn.regions.parcellations import Parcellations
@@ -333,7 +332,7 @@ def _sparse_clusters_parcellation(arr):
     return sparse_matrix
 
 
-def _sparse_clusters_radius(mask_img, radius, symmetric=False):
+def _sparse_clusters_radius(mask_img, radius):
     """
     Creates a sparse adjacency matrix from a mask image where each voxel
     is connected to its neighbors within a specified radius.
@@ -453,13 +452,13 @@ def load_alignment(input_path):
     return joblib.load(input_path)
 
 
-def get_connectivity_features(img, parcelation_img, masker):
+def get_connectivity_features(imgs, parcelation_img, masker):
     """Compute connectivity features for a single subject.
 
     Parameters
     ----------
-    img : Nifti1Image | SurfaceImage
-        Input subject image.
+    imgs : Iterable[Nifti1Image | SurfaceImage]
+        Input subject images.
     parcelation_img : Nifti1Image | SurfaceImage
         Labels image for connectivity seeds.
     masker : NiftiMasker | SurfaceMasker
@@ -470,42 +469,26 @@ def get_connectivity_features(img, parcelation_img, masker):
     Nifti1Image | SurfaceImage
         Connectivity features image.
     """
-
-    # Generate a LabelsMasker with the same parameters as the original masker
-    allowed_keys = {
-        "smoothing_fwhm",
-        "standardize",
-        "standardize_confounds",
-        "detrend",
-        "low_pass",
-        "high_pass",
-        "t_r",
-        "memory",
-        "memory_level",
-        "verbose",
-    }
-    params = {
-        k: v for k, v in masker.get_params().items() if k in allowed_keys
-    }
-    if params["standardize"] is False:
+    if masker.standardize is False:
         raise ValueError(
             "Standardization is required for connectivity features."
         )
-    if isinstance(parcelation_img, SurfaceImage):
-        connectivity_targets = SurfaceLabelsMasker(
-            labels_img=parcelation_img, **params
-        ).fit_transform(img)
-    else:
-        connectivity_targets = NiftiLabelsMasker(
-            labels_img=parcelation_img, **params
-        ).fit_transform(img)
+
+    correlation_features_list = []
+    data = masker.transform(imgs)
+    labels = list(apply_mask_fmri(parcelation_img, masker.mask_img_))
+    averaged_signals = np.stack(
+        [data[:, labels == lbl].mean(axis=1) for lbl in np.unique(labels)],
+        axis=1,
+    )
 
     # Compute the correlation features (n_targets x n_voxels)
-    data = masker.transform(img)
     correlation_features = (
-        connectivity_targets.T @ data / connectivity_targets.shape[0]
+        averaged_signals.T @ data / averaged_signals.shape[0]
     )
-    return masker.inverse_transform(correlation_features)
+    correlation_features = np.nan_to_num(correlation_features)
+    correlation_features_list.append(correlation_features)
+    return masker.inverse_transform(np.vstack(correlation_features))
 
 
 def get_modality_features(imgs, parcellation_img, masker, modality="response"):
@@ -546,29 +529,22 @@ def get_modality_features(imgs, parcellation_img, masker, modality="response"):
         If the modality is not one of 'response', 'connectivity', or 'hybrid'.
     """
     if modality == "response":
-        return imgs
+        return concat_imgs(imgs)
 
     elif modality == "connectivity":
-        connectivity_imgs = []
-        for img in imgs:
-            connectivity_imgs.append(
-                get_connectivity_features(img, parcellation_img, masker)
-            )
-        return connectivity_imgs
+        return get_connectivity_features(imgs, parcellation_img, masker)
 
     elif modality == "hybrid":
         hybrid_imgs = []
-        for img in imgs:
-            connectivity_img = get_connectivity_features(
-                img, parcellation_img, masker
+        connectivity_imgs = get_connectivity_features(
+            imgs, parcellation_img, masker
+        )
+        if isinstance(imgs[0], SurfaceImage):
+            hybrid_imgs = concatenate_surface_images(
+                [*imgs, connectivity_imgs]
             )
-            if isinstance(img, SurfaceImage):
-                hybrid_img = concatenate_surface_images(
-                    [img, connectivity_img]
-                )
-            else:
-                hybrid_img = concat_imgs([img, connectivity_img])
-            hybrid_imgs.append(hybrid_img)
+        else:
+            hybrid_imgs = concat_imgs([*imgs, connectivity_imgs])
         return hybrid_imgs
 
     else:
