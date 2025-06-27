@@ -1,6 +1,7 @@
 """Module for sparse template alignment."""
 
 import numpy as np
+from torch.utils.data import Dataset, DataLoader, RandomSampler
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 
@@ -10,20 +11,35 @@ from fmralign._utils import (
 )
 from fmralign.alignment_methods import SparseUOT
 from nilearn.masking import apply_mask_fmri, unmask
+from nilearn._utils.cache_mixin import _check_memory
+from functools import partial
 
 
-def _align_to_template(
+class SubjectDataset(Dataset):
+    def __init__(self, imgs, subject_loader):
+        self.imgs = imgs
+        self.subject_loader = subject_loader
+
+    def __len__(self):
+        return len(self.imgs)
+
+    def __getitem__(self, idx):
+        img_path = self.imgs[idx]
+        return self.subject_loader(img_path)
+
+
+def align_to_template(
     imgs,
     template_data,
-    masker,
     sparsity_mask,
+    subject_loader,
     verbose=False,
     device="cpu",
     **kwargs,
 ):
     alignment_estimators = []
     for img in imgs:
-        img_data = apply_mask_fmri(img, masker.mask_img_).astype(np.float32)
+        img_data = subject_loader(img)
         estimator = SparseUOT(
             sparsity_mask,
             method="sinkhorn",
@@ -42,52 +58,35 @@ def load_one_subject(imgs, parcellation_img, masker, modality):
     return apply_mask_fmri(imgs_, masker.mask_img_).astype(np.float32)
 
 
-def _fit_online_template(
+def fit_online_template(
     imgs,
-    masker,
-    parcellation_img,
     sparsity_mask,
-    modality="response",
+    subject_loader,
     n_iter=100,
     verbose=False,
     device="cpu",
+    num_workers=2,
+    prefetch_factor=2,
     **kwargs,
 ):
-    """Fit a the template to the subjects data using sparse alignment.
+    template_data = subject_loader(imgs[0])
 
-    Parameters
-    ----------
-    subjects_data : list of torch.Tensor of shape (n_samples, n_features)
-        List of subjects data.
-    sparsity_mask : torch sparse COO tensor
-        Sparsity mask for the alignment matrix.
-    modality : str, optional
-        Modality to be used for the alignment, by default "response".
-    n_iter : int, optional
-        Number of template updates, by default 2
-    verbose : bool, optional
-        Verbosity level, by default False
+    n_iter_ = max(n_iter, len(imgs))
+    # Create a dataset and a data loader
+    dataset = SubjectDataset(imgs, subject_loader)
+    # The sampler ensures we sample with replacement for n_iter steps
+    sampler = RandomSampler(dataset, replacement=True, num_samples=n_iter_)
 
-    Returns
-    -------
-    Tuple[torch.Tensor, List[alignment_methods.Alignment]]
-        Template data and list of alignment estimators
-        from the subjects data to the template.
-
-    Raises
-    ------
-    ValueError
-        Unknown alignment method.
-    """
-    # Initialize the template as the first image
-    template_data = load_one_subject(
-        imgs[0],
-        parcellation_img,
-        masker,
-        modality=modality,
+    # The DataLoader will use worker processes to call dataset.__getitem__ in the background
+    dataloader = DataLoader(
+        dataset,
+        sampler=sampler,
+        batch_size=1,  # Each batch contains one subject's data
+        num_workers=num_workers,  # Number of CPU processes to load data in parallel
+        prefetch_factor=prefetch_factor,  # Number of batches to prefetch per worker
+        pin_memory=False,  # Not needed for CPU-only workflow
     )
 
-    # Perform stochastic gradient descent to find the template
     estimator = SparseUOT(
         sparsity_mask,
         method="sinkhorn_divergence",
@@ -95,23 +94,19 @@ def _fit_online_template(
         verbose=max(0, verbose - 1),
         **kwargs,
     )
-    n_iter_ = max(n_iter, len(imgs))
-    for i in range(n_iter_):
+
+    # Main training loop
+    for i, img_data_batch in enumerate(dataloader):
         if verbose:
-            print(f"Iteration {i + 1}/{n_iter_}")
-        # Get a random image from the subjects
-        current_img = imgs[np.random.randint(len(imgs))]
-        img_data = load_one_subject(
-            current_img,
-            parcellation_img,
-            masker,
-            modality=modality,
-        )
-        estimator.fit(template_data, img_data)
+            print(f"Iteration {i + 1}/{n_iter}")
+
+        current_img_data = img_data_batch.squeeze(0).numpy()
+        estimator.fit(template_data, current_img_data)
         alpha = 1 / (i + 2)
         template_data = (
             1 - alpha
         ) * template_data + alpha * estimator.transform(template_data)
+
     return template_data
 
 
@@ -134,6 +129,7 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         device="cpu",
         n_jobs=1,
         verbose=0,
+        memory=None,
         **kwargs,
     ):
         """
@@ -196,6 +192,7 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
         self.device = device
         self.verbose = verbose
+        self.memory = memory
         self.kwargs = kwargs
 
     def fit(self, imgs):
@@ -218,16 +215,32 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
             Length : n_samples
 
         """
+        self.memory = _check_memory(self.memory)
+        if self.memory is not None:
+            subject_loader = self.memory.cache(
+                partial(
+                    load_one_subject,
+                    parcellation_img=self.clustering,
+                    masker=self.masker,
+                    modality=self.modality,
+                )
+            )
+        else:
+            subject_loader = partial(
+                load_one_subject,
+                parcellation_img=self.clustering,
+                masker=self.masker,
+                modality=self.modality,
+            )
+
         self.sparsity_mask = _sparse_clusters_radius(
             self.masker.mask_img_, self.radius
         )
 
-        template_data = _fit_online_template(
+        template_data = fit_online_template(
             imgs=imgs,
-            masker=self.masker,
-            parcellation_img=self.clustering,
             sparsity_mask=self.sparsity_mask,
-            modality=self.modality,
+            subject_loader=subject_loader,
             n_iter=self.n_iter,
             verbose=max(0, self.verbose - 1),
             device=self.device,
@@ -235,11 +248,11 @@ class OnlineTemplateAlignment(BaseEstimator, TransformerMixin):
         )
 
         self.template = unmask(template_data, self.masker.mask_img_)
-        self.fit_ = _align_to_template(
+        self.fit_ = align_to_template(
             imgs=imgs,
             template_data=template_data,
-            masker=self.masker,
             sparsity_mask=self.sparsity_mask,
+            subject_loader=subject_loader,
             device=self.device,
             verbose=max(0, self.verbose - 1),
             **self.kwargs,
