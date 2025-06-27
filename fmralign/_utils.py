@@ -475,20 +475,21 @@ def get_connectivity_features(imgs, parcelation_img, masker):
         )
 
     correlation_features_list = []
-    data = masker.transform(imgs)
-    labels = list(apply_mask_fmri(parcelation_img, masker.mask_img_))
-    averaged_signals = np.stack(
-        [data[:, labels == lbl].mean(axis=1) for lbl in np.unique(labels)],
-        axis=1,
-    )
+    runs_data = masker.transform(imgs)
+    for data in runs_data:
+        labels = apply_mask_fmri(parcelation_img, masker.mask_img_).flatten()
+        averaged_signals = np.stack(
+            [data[:, labels == lbl].mean(axis=1) for lbl in np.unique(labels)],
+            axis=1,
+        )
 
-    # Compute the correlation features (n_targets x n_voxels)
-    correlation_features = (
-        averaged_signals.T @ data / averaged_signals.shape[0]
-    )
-    correlation_features = np.nan_to_num(correlation_features)
-    correlation_features_list.append(correlation_features)
-    return masker.inverse_transform(np.vstack(correlation_features))
+        # Compute the correlation features (n_targets x n_voxels)
+        correlation_features = (
+            averaged_signals.T @ data / averaged_signals.shape[0]
+        )
+        correlation_features = np.nan_to_num(correlation_features)
+        correlation_features_list.append(correlation_features)
+    return masker.inverse_transform(np.vstack(correlation_features_list))
 
 
 def get_modality_features(imgs, parcellation_img, masker, modality="response"):
