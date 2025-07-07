@@ -17,13 +17,13 @@ data in a clean fashion.
 # -----------------
 # In this example we use the IBC dataset, which include a large number of
 # different contrasts maps for 12 subjects. We download the images for
-# subjects sub-01 and sub-02 (or retrieve them if they were already downloaded)
+# subjects sub-01 and sub-04 (or retrieve them if they were already downloaded)
 # Files is the list of paths for each subjects.
 # df is a dataframe with metadata about each of them.
 
 from fmralign.fetch_example_data import fetch_ibc_subjects_contrasts
 
-files, df, _ = fetch_ibc_subjects_contrasts(["sub-01", "sub-02"])
+files, df, _ = fetch_ibc_subjects_contrasts(["sub-01", "sub-04"])
 
 
 ###############################################################################
@@ -53,7 +53,7 @@ source_train = concat_imgs(
     df[df.subject == "sub-01"][df.acquisition == "ap"].path.values
 )
 target_train = concat_imgs(
-    df[df.subject == "sub-02"][df.acquisition == "ap"].path.values
+    df[df.subject == "sub-04"][df.acquisition == "ap"].path.values
 )
 
 surf_source_train = project_to_surface(source_train)
@@ -100,7 +100,7 @@ plotting.show()
 ###############################################################################
 # Projecting the left-out data
 # ----------------------------
-# Let's now align a left-out audio contrast from sub-01 to sub-02. We project
+# Let's now align a left-out audio contrast from sub-01 to sub-04. We project
 # the data on the surface and apply the learned alignment operator.
 
 surf_audio_source = project_to_surface(
@@ -113,7 +113,7 @@ surf_audio_source = project_to_surface(
 
 surf_audio_target = project_to_surface(
     df[
-        (df.subject == "sub-02")
+        (df.subject == "sub-04")
         & (df.condition == "audio_sentence")
         & (df.acquisition == "pa")
     ].path.values
