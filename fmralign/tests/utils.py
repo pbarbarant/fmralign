@@ -1,11 +1,8 @@
 import nibabel
 import numpy as np
-from nilearn.maskers import NiftiMasker
 from nilearn.surface import InMemoryMesh, PolyMesh, SurfaceImage
 from numpy.random import default_rng
 from numpy.testing import assert_array_almost_equal
-
-from fmralign._utils import _make_parcellation
 
 
 def zero_mean_coefficient_determination(
@@ -106,15 +103,6 @@ def random_niimg(shape):
     return im, mask_img
 
 
-def sample_parceled_data(n_pieces=1):
-    """Create sample data for testing"""
-    img, mask_img = random_niimg((8, 7, 6, 20))
-    masker = NiftiMasker(mask_img=mask_img)
-    data = masker.fit_transform(img)
-    labels = _make_parcellation(img, "kmeans", n_pieces, masker)
-    return data, masker, labels
-
-
 def _make_mesh():
     """Create a sample mesh with two parts: left and right, and total of
     9 vertices and 10 faces.
@@ -162,7 +150,20 @@ def surf_img(n_samples=1):
     return SurfaceImage(mesh, data)
 
 
-def sample_subjects_data(n_subjects=3):
-    """Sample data in one parcel for n_subjects"""
-    subjects_data = [np.random.rand(10, 20) for _ in range(n_subjects)]
-    return subjects_data
+def sample_one_subject(n_features=10, n_voxels=30):
+    """Generate random data for a single subject."""
+    return np.random.rand(n_features, n_voxels)
+
+
+def sample_labels(n_voxels=30, n_labels=1):
+    """Generate random labels for testing."""
+    return np.random.randint(0, n_labels, n_voxels)
+
+
+def sample_subjects(n_subjects=3, n_features=10, n_voxels=30, n_labels=1):
+    """Generate random data for multiple subjects."""
+    subjects_data = [
+        sample_one_subject(n_features, n_voxels) for _ in range(n_subjects)
+    ]
+    labels = sample_labels(n_voxels, n_labels)
+    return subjects_data, labels
