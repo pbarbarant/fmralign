@@ -161,11 +161,11 @@ from nilearn import plotting
 baseline_score_img = masker.inverse_transform(baseline_score)
 aligned_score_img = masker.inverse_transform(aligned_score)
 baseline_display = plotting.plot_stat_map(
-    baseline_score, display_mode="z", vmax=1, cut_coords=[-15, -5]
+    baseline_score_img, display_mode="z", vmax=1, cut_coords=[-15, -5]
 )
 baseline_display.title("Baseline correlation wt ground truth")
 display = plotting.plot_stat_map(
-    aligned_score, display_mode="z", cut_coords=[-15, -5], vmax=1
+    aligned_score_img, display_mode="z", cut_coords=[-15, -5], vmax=1
 )
 display.title("Prediction correlation wt ground truth")
 
