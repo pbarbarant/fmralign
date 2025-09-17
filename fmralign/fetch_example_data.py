@@ -44,7 +44,8 @@ def fetch_ibc_subjects_contrasts(subjects, data_dir=None, verbose=1):
     # The URLs can be retrieved from the nilearn account on OSF
     if subjects == "all":
         subjects = [
-            "sub-{i:02d}" for i in [1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15]
+            f"sub-{i:02d}"
+            for i in [1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15]
         ]
     dataset_name = "ibc"
     data_dir = get_dataset_dir(
