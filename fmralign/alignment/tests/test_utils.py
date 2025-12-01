@@ -106,7 +106,7 @@ def test_check_target():
     assert y == "loso"
 
     y = _check_target(subjects_data[0], subjects_data[0])
-    assert y == "pairwise"
+    assert_array_equal(y, subjects_data[0])
 
     with pytest.raises(
         ValueError, match="Target must be an array-like, 'template' or 'loso'."

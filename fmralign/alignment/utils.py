@@ -112,7 +112,7 @@ def _check_target(X, y):
             raise ValueError(
                 "Target must have the same number of samples as the input data."
             )
-        return "pairwise"
+        return y
     raise ValueError("Target must be an array-like, 'template' or 'loso'.")
 
 

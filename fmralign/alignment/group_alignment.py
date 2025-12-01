@@ -120,7 +120,10 @@ class GroupAlignment(BaseEstimator, TransformerMixin):
         self.labels_ = _check_labels(X_[0], self.labels)
         self.method_ = _check_method(self.method)
 
-        if alignment_strategy == "template":  # Template alignment
+        if (
+            isinstance(alignment_strategy, str)
+            and alignment_strategy == "template"
+        ):
             fit_, self.template = _fit_template(
                 X_,
                 self.method_,
@@ -130,7 +133,10 @@ class GroupAlignment(BaseEstimator, TransformerMixin):
                 self.n_iter,
                 self.scale_template,
             )
-        elif alignment_strategy == "loso":
+        elif (
+            isinstance(alignment_strategy, str)
+            and alignment_strategy == "loso"
+        ):
             fit_ = []
             for left_out_sub in self.subject_keys_:
                 _, external_template = _fit_template(

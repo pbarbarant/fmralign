@@ -61,7 +61,7 @@ class PairwiseAlignment(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
         self.verbose = verbose
 
-    def fit(self, X, Y) -> None:
+    def fit(self, X, Y):
         """Fit the pairwise alignment model to the data.
 
         Parameters
