@@ -34,6 +34,30 @@ def test_alignment_template(method):
 
 
 @pytest.mark.parametrize("method", methods)
+def test_alignment_loso(method):
+    """Test loso alignment."""
+    subjects_data, labels = sample_subjects()
+    X = dict(enumerate(subjects_data))
+
+    algo = GroupAlignment(method=method, labels=labels)
+    algo.fit(X, y="loso")
+
+    assert isinstance(algo.method_, _check_method(method).__class__)
+    assert len(algo.fitted_estimators) == len(X)
+    assert algo.template is None
+
+    for i, x in X.items():
+        transformed = algo._transform_one_array(x, algo.fitted_estimators[i])
+        if method == "identity":
+            assert_array_equal(transformed, x)
+        elif method == "srm":
+            n_components = algo.fitted_estimators[0].Wt.shape[1]
+            assert transformed.shape == (x.shape[0], n_components)
+        else:
+            assert transformed.shape == x.shape
+
+
+@pytest.mark.parametrize("method", methods)
 def test_alignment_target(method):
     """Test alignment to a target"""
     subjects_data, labels = sample_subjects()

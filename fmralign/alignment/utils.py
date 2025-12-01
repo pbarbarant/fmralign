@@ -100,18 +100,20 @@ def _check_target(X, y):
 
     Returns
     -------
-    y_ : ndarray or None
-        Validated target data for alignment.
+    str
+        Validated alignment strategy.
     """
-    if isinstance(y, str) and y.lower() == "template":
-        return None
+    if isinstance(y, str) and y == "template":
+        return "template"
+    elif isinstance(y, str) and y == "loso":
+        return "loso"
     if isinstance(y, np.ndarray):
         if y.shape[0] != X.shape[0]:
             raise ValueError(
                 "Target must have the same number of samples as the input data."
             )
-        return np.asarray(y)
-    raise ValueError("Target must be an array-like or None.")
+        return "pairwise"
+    raise ValueError("Target must be an array-like, 'template' or 'loso'.")
 
 
 def _check_method(method):
