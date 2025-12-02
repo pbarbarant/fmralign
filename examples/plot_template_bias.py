@@ -72,7 +72,7 @@ population_algo.fit(X_alignment, y="template")
 # are decoupled.
 
 loso_algo = GroupAlignment("procrustes", labels=labels)
-loso_algo.fit(X_alignment, y="loso")
+loso_algo.fit(X_alignment, y="leave_one_subject_out")
 
 ###############################################################################
 # Aligning test data

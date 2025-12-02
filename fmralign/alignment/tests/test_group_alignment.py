@@ -35,12 +35,12 @@ def test_alignment_template(method):
 
 @pytest.mark.parametrize("method", methods)
 def test_alignment_loso(method):
-    """Test loso alignment."""
+    """Test leave-one-subject-out alignment."""
     subjects_data, labels = sample_subjects()
     X = dict(enumerate(subjects_data))
 
     algo = GroupAlignment(method=method, labels=labels)
-    algo.fit(X, y="loso")
+    algo.fit(X, y="leave_one_subject_out")
 
     assert isinstance(algo.method_, _check_method(method).__class__)
     assert len(algo.fitted_estimators) == len(X)

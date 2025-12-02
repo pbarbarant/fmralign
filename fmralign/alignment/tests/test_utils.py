@@ -102,14 +102,15 @@ def test_check_target():
     y = _check_target(subjects_data[0], "template")
     assert y == "template"
 
-    y = _check_target(subjects_data[0], "loso")
-    assert y == "loso"
+    y = _check_target(subjects_data[0], "leave_one_subject_out")
+    assert y == "leave_one_subject_out"
 
     y = _check_target(subjects_data[0], subjects_data[0])
     assert_array_equal(y, subjects_data[0])
 
     with pytest.raises(
-        ValueError, match="Target must be an array-like, 'template' or 'loso'."
+        ValueError,
+        match="Target must be an array-like, 'template' or 'leave_one_subject_out'.",
     ):
         _check_target(
             subjects_data[0],

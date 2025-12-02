@@ -108,7 +108,7 @@ class GroupAlignment(BaseEstimator, TransformerMixin):
             - "template": Compute a single template from all subjects and align
             each subject to this shared template.
 
-            - "loso": Perform Leave-One-Subject-Out alignment. For each subject,
+            - "leave_one_subject_out": Perform Leave-One-Subject-Out alignment. For each subject,
             compute a template from all other subjects, then align that subject
             to its corresponding template. This process repeats for every subject.
 
@@ -135,7 +135,7 @@ class GroupAlignment(BaseEstimator, TransformerMixin):
             )
         elif (
             isinstance(alignment_strategy, str)
-            and alignment_strategy == "loso"
+            and alignment_strategy == "leave_one_subject_out"
         ):
             fit_ = []
             for left_out_sub in self.subject_keys_:

@@ -105,15 +105,17 @@ def _check_target(X, y):
     """
     if isinstance(y, str) and y == "template":
         return "template"
-    elif isinstance(y, str) and y == "loso":
-        return "loso"
+    elif isinstance(y, str) and y == "leave_one_subject_out":
+        return "leave_one_subject_out"
     if isinstance(y, np.ndarray):
         if y.shape[0] != X.shape[0]:
             raise ValueError(
                 "Target must have the same number of samples as the input data."
             )
         return y
-    raise ValueError("Target must be an array-like, 'template' or 'loso'.")
+    raise ValueError(
+        "Target must be an array-like, 'template' or 'leave_one_subject_out'."
+    )
 
 
 def _check_method(method):
