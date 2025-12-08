@@ -93,7 +93,7 @@ class GroupAlignment(BaseEstimator, TransformerMixin):
         self.scale_template = scale_template
         self.template = None
 
-    def fit(self, X, y="template") -> None:
+    def fit(self, X, y="template"):
         """Fit the group alignment model to the data.
 
         Parameters
@@ -103,17 +103,27 @@ class GroupAlignment(BaseEstimator, TransformerMixin):
             arrays of subject data. Each array should have the same number of
             samples and features.
         y : str or array-like, default="template"
-            Target for alignment. If "template", performs template alignment where
-            a template is computed from all subjects. If array-like, performs
-            pairwise alignment to the specified target data.
+            Alignment target, which determines the alignment strategy:
+
+            - "template": Compute a single template from all subjects and align
+            each subject to this shared template.
+
+            - "leave_one_subject_out": Perform Leave-One-Subject-Out alignment. For each subject,
+            compute a template from all other subjects, then align that subject
+            to its corresponding template. This process repeats for every subject.
+
+            - array-like: Align all subjects to the provided target data array.
         """
         # Validate input data
         self.subject_keys_, X_ = _check_input_arrays(X)
-        y_ = _check_target(X_[0], y)
+        alignment_strategy = _check_target(X_[0], y)
         self.labels_ = _check_labels(X_[0], self.labels)
         self.method_ = _check_method(self.method)
 
-        if y_ is None:  # Template alignment
+        if (
+            isinstance(alignment_strategy, str)
+            and alignment_strategy == "template"
+        ):
             fit_, self.template = _fit_template(
                 X_,
                 self.method_,
@@ -123,10 +133,35 @@ class GroupAlignment(BaseEstimator, TransformerMixin):
                 self.n_iter,
                 self.scale_template,
             )
+        elif (
+            isinstance(alignment_strategy, str)
+            and alignment_strategy == "leave_one_subject_out"
+        ):
+            fit_ = []
+            for left_out_sub in self.subject_keys_:
+                _, external_template = _fit_template(
+                    [v for k, v in X.items() if k != left_out_sub],
+                    self.method_,
+                    self.labels_,
+                    self.n_jobs,
+                    self.verbose,
+                    self.n_iter,
+                    self.scale_template,
+                )
+                pairwise_fit_ = _map_to_target(
+                    [X[left_out_sub]],
+                    external_template,
+                    self.method_,
+                    self.labels_,
+                    self.n_jobs,
+                    self.verbose,
+                )[0]
+                fit_.append(pairwise_fit_)
+
         else:  # Pairwise alignment
             fit_ = _map_to_target(
                 X_,
-                y_,
+                np.asarray(y),
                 self.method_,
                 self.labels_,
                 self.n_jobs,

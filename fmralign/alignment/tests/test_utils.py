@@ -100,14 +100,17 @@ def test_check_target():
     subjects_data, _ = sample_subjects()
 
     y = _check_target(subjects_data[0], "template")
-    assert y is None  # Template alignment should return None
+    assert y == "template"
+
+    y = _check_target(subjects_data[0], "leave_one_subject_out")
+    assert y == "leave_one_subject_out"
 
     y = _check_target(subjects_data[0], subjects_data[0])
-    assert isinstance(y, np.ndarray)
-    assert y.shape == subjects_data[0].shape
+    assert_array_equal(y, subjects_data[0])
 
     with pytest.raises(
-        ValueError, match="Target must be an array-like or None."
+        ValueError,
+        match="Target must be an array-like, 'template' or 'leave_one_subject_out'.",
     ):
         _check_target(
             subjects_data[0],
